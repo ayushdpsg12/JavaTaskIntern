@@ -1,125 +1,34 @@
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-
-public class EnvironmentExtractor {
-
-    private static final double ONE_MINUTE_IN_S = 60;
-    private static final double ONE_HOUR_IN_S = ONE_MINUTE_IN_S * 60;
-    private static final double ONE_DAY_IN_S = ONE_HOUR_IN_S * 24;
-    private static final double TWO_DAYS_IN_S = ONE_DAY_IN_S * 2;
-    private static final double ONE_MONTH_IN_S = ONE_DAY_IN_S * 30;
-
-    private static final double TIME_NORM_MIN = Math.log(ONE_MINUTE_IN_S);
-    private static final double TIME_NORM_MAX = Math.log(ONE_MONTH_IN_S * 12);
-    private static final double TIME_NORM_DELTA = TIME_NORM_MAX - TIME_NORM_MIN;
-
-    private static final double AREA_NORM_MIN = Math.log(225);
-    private static final double AREA_NORM_MAX = Math.log(530000000000.0);
-    private static final double AREA_NORM_DELTA = AREA_NORM_MAX - AREA_NORM_MIN;
-
-    private List<Candidate> _evaluateLocations(List<Candidate> locations, int documentLength) {
+public List<Candidate> evaluateLocations(Document document) {
+        List<Object[]> rawLocations = new ArrayList<>();
+        List<Object[]> uniqueLocations = new ArrayList<>();
         List<Candidate> rankedLocations = new ArrayList<>();
+        double[] weights = this.weights[0];
+        double weightsSum = 0;
+        for (double weight : weights) {
+            weightsSum += weight;
+        }
+        int maxArea = 1;
 
-        // Sort locations based on ID
-        Collections.sort(locations, (loc1, loc2) -> Integer.compare(Integer.parseInt(loc2.getCalculations("openstreetmap_nominatim").get("place_id")),
-                Integer.parseInt(loc1.getCalculations("openstreetmap_nominatim").get("place_id"))));
+        for (Candidate candidate : document.getCandidates(this.getId() + "Locations")) {
+            // fetch the boundingbox: (min lat, max lat, min long, max long)
+            List<Object> parts = candidate.getRaw();
+            Location location = candidate.getCalculations("openstreetmap_nominatim");
+            String[] bb = location.raw.get("boundingbox");
 
-        List<Candidate> uniqueLocations = new ArrayList<>();
-        int maxN = 1;
-        int maxEntailment = 1;
-
-        for (int i = 0; i < locations.size(); i++) {
-            Candidate location = locations.get(i);
-            String[] boundingBox = location.getCalculations("openstreetmap_nominatim").get("boundingbox").split(",");
-
-            double minLat = Double.parseDouble(boundingBox[0]);
-            double maxLat = Double.parseDouble(boundingBox[1]);
-            double minLon = Double.parseDouble(boundingBox[2]);
-            double maxLon = Double.parseDouble(boundingBox[3]);
-
-            double area = greatCircleDistance(minLat, minLon, minLat, maxLon) * greatCircleDistance(minLat, minLon, maxLat, minLon);
-
-            location.setRawBoundingBox(new double[]{minLat, maxLat, minLon, maxLon});
-            location.setArea(area);
-            location.setMinPosition(i);
-            location.setMaxPosition(i);
-            location.setFrequency(1);
-            location.setEntailment(0);
-
-            uniqueLocations.add(location);
-
-            for (int j = i + 1; j < locations.size(); j++) {
-                Candidate alt = locations.get(j);
-                String[] altBoundingBox = alt.getCalculations("openstreetmap_nominatim").get("boundingbox").split(",");
-
-                double altMinLat = Double.parseDouble(altBoundingBox[0]);
-                double altMaxLat = Double.parseDouble(altBoundingBox[1]);
-                double altMinLon = Double.parseDouble(altBoundingBox[2]);
-                double altMaxLon = Double.parseDouble(altBoundingBox[3]);
-
-                if (altMinLat >= minLat && altMaxLat <= maxLat && altMinLon >= minLon && altMaxLon <= maxLon) {
-                    location.setEntailment(location.getEntailment() + 1);
-                }
+            // use the vincenty algorithm to calculate the covered area
+            int area = (int) greatCircle(new double[] {Double.parseDouble(bb[0]), Double.parseDouble(bb[2])},
+                    new double[] {Double.parseDouble(bb[0]), Double.parseDouble(bb[3])}).meters
+                    * (int) greatCircle(new double[] {Double.parseDouble(bb[0]), Double.parseDouble(bb[2])},
+                            new double[] {Double.parseDouble(bb[1]), Double.parseDouble(bb[2])}).meters;
+            double[] bbDouble = new double[4];
+            for (int i = 0; i < 4; i++) {
+                bbDouble[i] = Double.parseDouble(bb[i]);
             }
+            rawLocations.add(new Object[] {parts, location.raw.get("place_id"), location.point, bbDouble, area, 0, 0,
+                    candidate, 0});
 
-            maxN = Math.max(maxN, location.getFrequency());
-            maxEntailment = Math.max(maxEntailment, location.getEntailment());
+            maxArea = Math.max(maxArea, area);
         }
 
-              for (Candidate location : uniqueLocations) {
-            // Calculate normalized frequency
-            double freqNorm = Math.log(location.getFrequency()) / Math.log(maxN);
-
-            // Calculate normalized entailment
-            double entailmentNorm = Math.log(location.getEntailment() + 1) / Math.log(maxEntailment + 1);
-
-            // Calculate normalized area
-            double areaNorm = Math.log(location.getArea()) / AREA_NORM_DELTA + AREA_NORM_MIN;
-
-            // Calculate normalized position
-            double positionNorm = Math.log(location.getMinPosition() + 1) / Math.log(locations.size());
-
-            // Calculate normalized time
-            double timeNorm = Math.log(location.getTime()) / TIME_NORM_DELTA + TIME_NORM_MIN;
-
-            // Calculate location score
-            double score = freqNorm + entailmentNorm + areaNorm + positionNorm + timeNorm;
-
-            location.setScore(score);
-        }
-
-        // Sort locations based on score
-        Collections.sort(uniqueLocations, (loc1, loc2) -> Double.compare(loc2.getScore(), loc1.getScore()));
-
-        // Select top ranked locations based on document length
-        int numLocations = Math.min(documentLength, uniqueLocations.size());
-        rankedLocations.addAll(uniqueLocations.subList(0, numLocations));
-
-        return rankedLocations;
-    }
-
-    // Helper method to calculate the great circle distance
-    private double greatCircleDistance(double lat1, double lon1, double lat2, double lon2) {
-        // implementation of great circle distance calculation
-        // ...
-    }
-
-    // Candidate class representing a location
-    private class Candidate {
-        private String name;
-        private String id;
-        private double[] rawBoundingBox;
-        private double area;
-        private int minPosition;
-        private int maxPosition;
-        private int frequency;
-        private int entailment;
-        private double time;
-        private double score;
-
-        // Constructor, getters, and setters
-        // ...
-    }
-}
-
+        // sort locations based id
+        rawLocations.sort((o1, o2) -> Integer.parseInt((String) o2[1]) - Integer
